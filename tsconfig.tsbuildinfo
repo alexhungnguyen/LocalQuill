@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx","./src/components/editor.tsx","./src/components/settingspanel.tsx","./src/components/sidebar.tsx","./src/db/db.ts","./src/lib/mlx.ts","./src/lib/prompt.ts","./src/lib/stories.ts","./src/store/usestore.ts"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/editor.tsx","./src/components/settingspanel.tsx","./src/components/sidebar.tsx","./src/db/db.ts","./src/lib/llm.ts","./src/lib/prompt.ts","./src/lib/stories.ts","./src/store/usestore.ts"],"version":"5.9.3"}

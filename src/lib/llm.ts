@@ -1,5 +1,6 @@
 /**
- * Thin client for the OpenAI-compatible endpoints exposed by `mlx_lm.server`.
+ * Thin client for any OpenAI-compatible `/v1/completions` server
+ * (mlx_lm, Ollama, llama.cpp, etc.).
  *
  * We deliberately stick to /v1/completions (raw text in, raw text out) rather
  * than chat completions: a NovelAI-style writing UI streams continuations of
@@ -14,15 +15,15 @@ export interface CompletionParams {
   topP: number;
   /** Token strings that, when produced, immediately end generation. */
   stop?: string[];
-  /** OpenAI-style repetition penalty (mlx_lm.server accepts this field). */
+  /** OpenAI-style repetition penalty. Supported by mlx_lm and llama.cpp. */
   repetitionPenalty?: number;
   /**
-   * Never set this for completions against mlx_lm.server.
-   * Sending any `model` value causes the server to attempt to load that
-   * specific model id (hitting the HF API, potentially loading the wrong
-   * one). The server already knows what it loaded via --model; omitting
-   * the field lets it use whatever is running. Field kept in the interface
-   * for future compatibility but should be left undefined.
+   * Avoid setting this field when targeting mlx_lm.server.
+   * Sending a `model` value causes it to attempt to load that specific model
+   * id (hitting the HF API, potentially loading the wrong one). The server
+   * already knows what it loaded via --model; omitting the field lets it use
+   * whatever is running. Field kept in the interface for future compatibility
+   * but should be left undefined for mlx_lm.
    */
   model?: never;
 }
@@ -75,7 +76,7 @@ export async function streamCompletion(
     const text = await response.text().catch(() => "");
     handlers.onError(
       new Error(
-        `MLX server returned ${response.status} ${response.statusText}` +
+        `Server returned ${response.status} ${response.statusText}` +
           (text ? `: ${text.slice(0, 200)}` : ""),
       ),
     );

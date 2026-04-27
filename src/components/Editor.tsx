@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { db, type Story } from "../db/db";
-import { streamCompletion } from "../lib/mlx";
+import { streamCompletion } from "../lib/llm";
 import { approxTokens, buildPrompt } from "../lib/prompt";
 import { snapshotStory, updateStory } from "../lib/stories";
 import { useStore } from "../store/useStore";
@@ -74,16 +74,15 @@ function ActiveEditor({
   const generatingFromRef = useRef<number>(0);
   // Prompts we've already sent during this session.
   //
-  // Workaround for an upstream bug in `mlx_lm.server`: when a request's
-  // prompt tokenizes to a sequence that exactly matches one already in the
-  // server's KV-cache trie, `fetch_nearest_cache` returns `(cache, [])`
-  // and `insert_segments` then crashes on `seq[-1]` for an empty list.
-  // (See mlx_lm/models/cache.py:fetch_nearest_cache — the exact-match
-  // branch fails to keep one token, unlike the longer-match branch.)
+  // Workaround for an upstream bug in mlx_lm.server: when a request's prompt
+  // tokenizes to a sequence that exactly matches one already in the server's
+  // KV-cache trie, `fetch_nearest_cache` returns `(cache, [])` and
+  // `insert_segments` crashes on `seq[-1]` for an empty list.
+  // (mlx_lm/models/cache.py — the exact-match branch fails to keep one token,
+  // unlike the longer-match branch.)
   // Triggers in normal use: Undo+Generate, Stop+Generate, double-click.
-  // Nudging the prompt with a trailing newline shifts the token sequence
-  // just enough to avoid the exact-match path while keeping prefix cache
-  // benefits intact.
+  // Nudging the prompt with a trailing newline shifts the token sequence just
+  // enough to avoid the exact-match path while keeping prefix-cache benefits.
   const sentPromptsRef = useRef<Set<string>>(new Set());
 
   // When the user switches stories, sync local state from the new row.
@@ -142,9 +141,8 @@ function ActiveEditor({
       authorsNoteDepthChars: settings.authorsNoteDepth,
     });
 
-    // mlx_lm.server crashes its worker thread on an empty prompt
-    // (IndexError on `seq[-1]` inside generate.py:insert_segments).
-    // Catch it here so the user gets a friendly hint instead.
+    // An empty prompt crashes mlx_lm.server (IndexError on `seq[-1]`
+    // inside generate.py:insert_segments). Catch it here with a friendly hint.
     if (prompt.trim().length === 0) {
       setError(
         "Nothing to continue from yet. Type a sentence, or fill in Memory / Author's Note.",
@@ -458,9 +456,8 @@ function EmptyState() {
         <p className="text-ink-300 text-sm leading-relaxed">
           Pick a story from the sidebar, or click{" "}
           <span className="text-accent-400">New Story</span> to start a fresh
-          page. LocalQuill talks to your local{" "}
-          <code className="text-ink-100">mlx_lm.server</code> and never sends
-          your writing anywhere else.
+          page. LocalQuill talks to your local LLM server and never sends your
+          writing anywhere else.
         </p>
       </div>
     </main>

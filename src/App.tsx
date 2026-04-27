@@ -3,7 +3,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { useStore } from "./store/useStore";
-import { pingServer } from "./lib/mlx";
+import { pingServer } from "./lib/llm";
 
 export default function App() {
   const loadPersistedSettings = useStore((s) => s.loadPersistedSettings);

@@ -163,9 +163,9 @@ function ServerStatus({
         : "bg-ink-500";
   const text =
     status === "online"
-      ? "MLX server online"
+      ? "LLM server online"
       : status === "offline"
-        ? "MLX server unreachable"
+        ? "LLM server unreachable"
         : "Checking server…";
   return (
     <div className="rounded-md bg-ink-950 border border-ink-800 p-2.5">
@@ -180,11 +180,16 @@ function ServerStatus({
       )}
       {status === "offline" && (
         <div className="mt-2 text-[11px] text-ink-400 leading-snug">
-          Start it with:
+          Start a local server on <code className="text-ink-200">127.0.0.1:8080</code>, e.g.:
           <pre className="mt-1 bg-ink-900 border border-ink-800 rounded p-1.5 text-[10.5px] text-ink-200 whitespace-pre-wrap">
-{`mlx_lm.server \\
-  --model nightmedia/Huihui-Qwen3-30B-A3B-Instruct-2507-abliterated-dwq4-mlx \\
-  --host 127.0.0.1 --port 8080`}
+{`# mlx_lm
+mlx_lm.server --model <model> --host 127.0.0.1 --port 8080
+
+# llama.cpp
+llama-server --model model.gguf --port 8080
+
+# Ollama
+ollama serve`}
           </pre>
         </div>
       )}
