@@ -35,6 +35,12 @@ interface UIState {
   serverModel: string | null;
   /** Length of last generation, in chars, for the undo button. */
   lastGenerationLength: number | null;
+  /** Stack of checkpoint contents to which we can undo. */
+  undoStack: string[];
+  /** Stack of undone states available for redo. */
+  redoStack: string[];
+  /** The content at the current history position (the checkpoint). */
+  baseContent: string;
 
   setCurrentStoryId: (id: string | null) => void;
   setIsGenerating: (v: boolean) => void;
@@ -42,6 +48,12 @@ interface UIState {
   setServerStatus: (s: "unknown" | "online" | "offline") => void;
   setServerModel: (m: string | null) => void;
   setLastGenerationLength: (n: number | null) => void;
+  pushCheckpoint: (content: string) => void;
+  undo: () => { targetContent: string; removedText: string } | null;
+  redo: () => { targetContent: string; addedText: string } | null;
+  setBaseContent: (content: string) => void;
+  clearHistory: () => void;
+  clearRedoStack: () => void;
 
   loadPersistedSettings: () => Promise<void>;
 }
@@ -53,6 +65,9 @@ export const useStore = create<UIState>((set, get) => ({
   serverStatus: "unknown",
   serverModel: null,
   lastGenerationLength: null,
+  undoStack: [],
+  redoStack: [],
+  baseContent: "",
 
   setCurrentStoryId: (id) => {
     set({ currentStoryId: id, lastGenerationLength: null });
@@ -62,6 +77,49 @@ export const useStore = create<UIState>((set, get) => ({
   setServerStatus: (s) => set({ serverStatus: s }),
   setServerModel: (m) => set({ serverModel: m }),
   setLastGenerationLength: (n) => set({ lastGenerationLength: n }),
+
+  pushCheckpoint: (content) =>
+    set((state) => ({
+      undoStack: [...state.undoStack, content],
+      redoStack: [], // clear redo on new forward action
+    })),
+
+  undo: () => {
+    const state = get();
+    if (state.undoStack.length === 0) return null;
+    const previous = state.undoStack[state.undoStack.length - 1];
+    const current = state.baseContent;
+    // Ensure current starts with previous; otherwise, state diverged (should be prevented by UI)
+    if (!current.startsWith(previous)) return null;
+    const removedText = current.slice(previous.length);
+    set({
+      undoStack: state.undoStack.slice(0, -1),
+      redoStack: [...state.redoStack, current],
+      baseContent: previous,
+    });
+    return { targetContent: previous, removedText };
+  },
+
+  redo: () => {
+    const state = get();
+    if (state.redoStack.length === 0) return null;
+    const next = state.redoStack[state.redoStack.length - 1];
+    const current = state.baseContent;
+    if (!next.startsWith(current)) return null;
+    const addedText = next.slice(current.length);
+    set({
+      redoStack: state.redoStack.slice(0, -1),
+      undoStack: [...state.undoStack, current],
+      baseContent: next,
+    });
+    return { targetContent: next, addedText };
+  },
+
+  setBaseContent: (content) => set({ baseContent: content }),
+
+  clearHistory: () => set({ undoStack: [], redoStack: [], baseContent: "" }),
+
+  clearRedoStack: () => set((state) => ({ redoStack: [] })),
 
   updateSettings: async (patch) => {
     const merged = { ...get().settings, ...patch };
