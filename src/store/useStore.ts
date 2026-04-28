@@ -119,7 +119,7 @@ export const useStore = create<UIState>((set, get) => ({
 
   clearHistory: () => set({ undoStack: [], redoStack: [], baseContent: "" }),
 
-  clearRedoStack: () => set((state) => ({ redoStack: [] })),
+  clearRedoStack: () => set(() => ({ redoStack: [] })),
 
   updateSettings: async (patch) => {
     const merged = { ...get().settings, ...patch };

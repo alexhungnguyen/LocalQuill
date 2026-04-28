@@ -1,5 +1,8 @@
 import { useLiveQuery } from "dexie-react-hooks";
-import { Sparkles, Square, Undo2, FileText, Brain } from "lucide-react";
+import { Sparkles, Square, Undo2, Redo2, FileText, Brain } from "lucide-react";
+
+// Redo2 is imported for Task 3 (redo button UI)
+Redo2;
 import {
   useCallback,
   useEffect,
@@ -21,7 +24,6 @@ export function Editor() {
   const isGenerating = useStore((s) => s.isGenerating);
   const setIsGenerating = useStore((s) => s.setIsGenerating);
   const setLastGenLen = useStore((s) => s.setLastGenerationLength);
-  const lastGenLen = useStore((s) => s.lastGenerationLength);
   const story = useLiveQuery(
     () => (currentStoryId ? db.stories.get(currentStoryId) : undefined),
     [currentStoryId],
@@ -37,7 +39,6 @@ export function Editor() {
       story={story}
       isGenerating={isGenerating}
       setIsGenerating={setIsGenerating}
-      lastGenLen={lastGenLen}
       setLastGenLen={setLastGenLen}
       settings={settings}
     />
@@ -48,14 +49,12 @@ function ActiveEditor({
   story,
   isGenerating,
   setIsGenerating,
-  lastGenLen,
   setLastGenLen,
   settings,
 }: {
   story: Story;
   isGenerating: boolean;
   setIsGenerating: (v: boolean) => void;
-  lastGenLen: number | null;
   setLastGenLen: (n: number | null) => void;
   settings: ReturnType<typeof useStore.getState>["settings"];
 }) {
@@ -72,6 +71,7 @@ function ActiveEditor({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const generatingFromRef = useRef<number>(0);
+  const preGenerationContentRef = useRef<string>("");
   // Prompts we've already sent during this session.
   //
   // Workaround for an upstream bug in mlx_lm.server: when a request's prompt
@@ -84,6 +84,26 @@ function ActiveEditor({
   // Nudging the prompt with a trailing newline shifts the token sequence just
   // enough to avoid the exact-match path while keeping prefix-cache benefits.
   const sentPromptsRef = useRef<Set<string>>(new Set());
+
+  // History management store selectors and actions
+  const undoStack = useStore((s) => s.undoStack);
+  const redoStack = useStore((s) => s.redoStack);
+  const baseContent = useStore((s) => s.baseContent);
+  const pushCheckpoint = useStore((s) => s.pushCheckpoint);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  const setBaseContent = useStore((s) => s.setBaseContent);
+  const clearHistory = useStore((s) => s.clearHistory);
+
+  // Compute undo/redo availability
+  const canUndo = undoStack.length > 0 && content === baseContent;
+  const canRedo = redoStack.length > 0 && content === baseContent;
+
+  // Clear history when switching stories
+  useEffect(() => {
+    clearHistory();
+    setBaseContent(story.content);
+  }, [story.id, clearHistory, setBaseContent]);
 
   // When the user switches stories, sync local state from the new row.
   // We compare ids via the `key` on this component, but if the same story
@@ -164,6 +184,10 @@ function ActiveEditor({
       if (first !== undefined) sentPromptsRef.current.delete(first);
     }
 
+    // Save pre-generation content for history tracking
+    preGenerationContentRef.current = content;
+    pushCheckpoint(content);
+
     await flushAndSnapshot("before generate");
 
     const abort = new AbortController();
@@ -196,6 +220,8 @@ function ActiveEditor({
               setContent((prev) => prev.slice(0, prev.length - drop));
             }
           }
+          const finalContent = preGenerationContentRef.current + appended;
+          setBaseContent(finalContent);
           setLastGenLen(appended.length);
           setIsGenerating(false);
           abortRef.current = null;
@@ -233,12 +259,20 @@ function ActiveEditor({
   }, []);
 
   const handleUndo = useCallback(() => {
-    if (lastGenLen == null || lastGenLen <= 0) return;
-    setContent((prev) => prev.slice(0, prev.length - lastGenLen));
-    setLastGenLen(null);
-  }, [lastGenLen, setLastGenLen]);
+    const result = undo();
+    if (result) {
+      setContent(result.targetContent);
+    }
+  }, [undo]);
 
-  // Cmd/Ctrl+Enter to generate, Esc to stop.
+  const handleRedo = useCallback(() => {
+    const result = redo();
+    if (result) {
+      setContent(result.targetContent);
+    }
+  }, [redo]);
+
+  // Cmd/Ctrl+Enter to generate, Esc to stop, Cmd/Ctrl+Z to undo, Cmd+Shift+Z or Cmd/Ctrl+Y to redo.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -247,11 +281,17 @@ function ActiveEditor({
         else void handleGenerate();
       } else if (e.key === "Escape" && isGenerating) {
         handleStop();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
+        e.preventDefault();
+        if (canUndo) void handleUndo();
+      } else if (((e.metaKey || e.ctrlKey) && e.key === "y") || ((e.metaKey && e.shiftKey) && e.key === "Z")) {
+        e.preventDefault();
+        if (canRedo) void handleRedo();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [isGenerating, handleGenerate, handleStop]);
+  }, [isGenerating, handleGenerate, handleStop, canUndo, canRedo, handleUndo, handleRedo]);
   // `handleGenerate` already short-circuits on an empty prompt, so the
   // shortcut path is also covered.
 
@@ -276,6 +316,12 @@ function ActiveEditor({
 
   const promptTokens = approxTokens(promptPreview);
   const canGenerate = promptPreview.trim().length > 0;
+
+  const undoPreview = useMemo(() => {
+    if (!canUndo || undoStack.length === 0) return "";
+    const target = undoStack[undoStack.length - 1];
+    return content.slice(target.length);
+  }, [canUndo, content, undoStack]);
 
   return (
     <main className="flex-1 h-full flex flex-col overflow-hidden">
@@ -307,7 +353,13 @@ function ActiveEditor({
           <textarea
             ref={editorRef}
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              const newValue = e.target.value;
+              setContent(newValue);
+              if (redoStack.length > 0) {
+                useStore.getState().clearRedoStack();
+              }
+            }}
             placeholder={
               "Start typing your story here, or paste a beginning and hit Generate.\n\nThe model continues from wherever the cursor is at the end of the text — exactly like a typewriter that drinks too much coffee."
             }
@@ -320,11 +372,14 @@ function ActiveEditor({
           <Toolbar
             isGenerating={isGenerating}
             canGenerate={canGenerate}
-            canUndo={lastGenLen != null && lastGenLen > 0}
+            canUndo={canUndo}
+            canRedo={canRedo}
             error={error}
             onGenerate={handleGenerate}
             onStop={handleStop}
             onUndo={handleUndo}
+            onRedo={handleRedo}
+            undoPreview={undoPreview}
           />
         </section>
 
@@ -384,19 +439,30 @@ function Toolbar({
   isGenerating,
   canGenerate,
   canUndo,
+  canRedo: _canRedo,
   error,
   onGenerate,
   onStop,
   onUndo,
+  onRedo: _onRedo,
+  undoPreview: _undoPreview,
 }: {
   isGenerating: boolean;
   canGenerate: boolean;
   canUndo: boolean;
+  canRedo: boolean;
   error: string | null;
   onGenerate: () => void;
   onStop: () => void;
   onUndo: () => void;
+  onRedo: () => void;
+  undoPreview: string;
 }) {
+  // Placeholder references for Task 3 (avoid unused variable errors)
+  void _canRedo;
+  void _onRedo;
+  void _undoPreview;
+
   return (
     <div className="border-t border-ink-800 bg-ink-900 px-4 py-2 flex items-center gap-2">
       {isGenerating ? (
