@@ -79,10 +79,12 @@ export const useStore = create<UIState>((set, get) => ({
   setLastGenerationLength: (n) => set({ lastGenerationLength: n }),
 
   pushCheckpoint: (content) =>
-    set((state) => ({
-      undoStack: [...state.undoStack, content],
-      redoStack: [], // clear redo on new forward action
-    })),
+    set((state) => {
+      const MAX = 50;
+      const newStack = [...state.undoStack, content];
+      if (newStack.length > MAX) newStack.shift();
+      return { undoStack: newStack, redoStack: [] };
+    }),
 
   undo: () => {
     const state = get();

@@ -63,3 +63,17 @@ test("clearHistory resets stacks and baseContent", () => {
   expect(state.redoStack).toEqual([]);
   expect(state.baseContent).toBe("");
 });
+
+test("pushCheckpoint caps undoStack at 50 entries", () => {
+  const { pushCheckpoint } = useStore.getState();
+  // Add 60 entries
+  for (let i = 0; i < 60; i++) {
+    pushCheckpoint(`content-${i}`);
+  }
+  const state = useStore.getState();
+  expect(state.undoStack.length).toBe(50);
+  // The first 10 should have been dropped, oldest remaining is content-10
+  expect(state.undoStack[0]).toBe("content-10");
+  // The most recent should be content-59
+  expect(state.undoStack[49]).toBe("content-59");
+});
