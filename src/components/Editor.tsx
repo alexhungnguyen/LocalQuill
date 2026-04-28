@@ -99,6 +99,9 @@ function ActiveEditor({
   const canUndo = undoStack.length > 0 && content === baseContent;
   const canRedo = redoStack.length > 0 && content === baseContent;
 
+  // Track dirty state (uncommitted changes)
+  const isDirty = content !== baseContent;
+
   // Clear history when switching stories
   useEffect(() => {
     clearHistory();
@@ -364,10 +367,10 @@ function ActiveEditor({
               "Start typing your story here, or paste a beginning and hit Generate.\n\nThe model continues from wherever the cursor is at the end of the text — exactly like a typewriter that drinks too much coffee."
             }
             spellCheck
-            className="flex-1 w-full bg-ink-950 text-ink-50 px-10 py-8
+            className={`flex-1 w-full bg-ink-950 ${isDirty ? "text-blue-400" : "text-ink-50"} px-10 py-8
                        font-prose text-[17px] leading-[1.7] resize-none
                        outline-none placeholder-ink-500
-                       caret-accent-500"
+                       caret-accent-500`}
           />
           <Toolbar
             isGenerating={isGenerating}
