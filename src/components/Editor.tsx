@@ -439,13 +439,13 @@ function Toolbar({
   isGenerating,
   canGenerate,
   canUndo,
-  canRedo: _canRedo,
+  canRedo,
   error,
   onGenerate,
   onStop,
   onUndo,
-  onRedo: _onRedo,
-  undoPreview: _undoPreview,
+  onRedo,
+  undoPreview,
 }: {
   isGenerating: boolean;
   canGenerate: boolean;
@@ -458,10 +458,7 @@ function Toolbar({
   onRedo: () => void;
   undoPreview: string;
 }) {
-  // Placeholder references for Task 3 (avoid unused variable errors)
-  void _canRedo;
-  void _onRedo;
-  void _undoPreview;
+  const [showUndoPreview, setShowUndoPreview] = useState(false);
 
   return (
     <div className="border-t border-ink-800 bg-ink-900 px-4 py-2 flex items-center gap-2">
@@ -488,10 +485,25 @@ function Toolbar({
       <button
         onClick={onUndo}
         disabled={!canUndo || isGenerating}
-        className="btn-ghost"
-        title="Remove the last generated chunk"
+        className="btn-ghost relative"
+        title={undoPreview || "Nothing to undo"}
+        onMouseEnter={() => canUndo && setShowUndoPreview(true)}
+        onMouseLeave={() => setShowUndoPreview(false)}
       >
         <Undo2 size={14} /> Retry / Undo
+        {showUndoPreview && undoPreview && (
+          <div className="absolute bottom-full left-0 mb-2 p-2 bg-ink-800 text-ink-100 text-xs rounded shadow-lg max-w-xs break-words border border-ink-700 z-10">
+            {undoPreview.length > 200 ? undoPreview.slice(0, 200) + "…" : undoPreview}
+          </div>
+        )}
+      </button>
+      <button
+        onClick={onRedo}
+        disabled={!canRedo || isGenerating}
+        className="btn-ghost"
+        title="Redo (⌘⇧Z or Ctrl+Y)"
+      >
+        <Redo2 size={14} /> Redo
       </button>
       <div className="flex-1" />
       {error && (
