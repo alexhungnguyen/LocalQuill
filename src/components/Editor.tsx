@@ -68,6 +68,11 @@ function ActiveEditor({
   const [showSidePanels, setShowSidePanels] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Hover preview for undo: state and refs
+  const [undoHighlightRange, setUndoHighlightRange] = useState<{ start: number; end: number } | null>(null);
+  const savedSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const savedActiveRef = useRef<HTMLElement | null>(null);
+
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const generatingFromRef = useRef<number>(0);
@@ -262,6 +267,8 @@ function ActiveEditor({
   }, []);
 
   const handleUndo = useCallback(() => {
+    // Clear any hover preview selection
+    setUndoHighlightRange(null);
     const result = undo();
     if (result) {
       setContent(result.targetContent);
@@ -305,6 +312,31 @@ function ActiveEditor({
     if (el) el.scrollTop = el.scrollHeight;
   }, [content, isGenerating]);
 
+  // Manage selection highlighting for undo preview
+  useEffect(() => {
+    if (!editorRef.current) return;
+    if (undoHighlightRange) {
+      if (savedActiveRef.current === null) {
+        savedActiveRef.current = document.activeElement as HTMLElement;
+        savedSelectionRef.current = {
+          start: editorRef.current.selectionStart,
+          end: editorRef.current.selectionEnd,
+        };
+      }
+      editorRef.current.focus();
+      editorRef.current.setSelectionRange(undoHighlightRange.start, undoHighlightRange.end);
+    } else {
+      if (savedActiveRef.current && savedSelectionRef.current) {
+        savedActiveRef.current.focus();
+        if (savedActiveRef.current === editorRef.current && editorRef.current) {
+          editorRef.current.setSelectionRange(savedSelectionRef.current.start, savedSelectionRef.current.end);
+        }
+      }
+      savedActiveRef.current = null;
+      savedSelectionRef.current = null;
+    }
+  }, [undoHighlightRange]);
+
   const promptPreview = useMemo(
     () =>
       buildPrompt({
@@ -325,6 +357,24 @@ function ActiveEditor({
     const target = undoStack[undoStack.length - 1];
     return content.slice(target.length);
   }, [canUndo, content, undoStack]);
+
+  // Compute range for editor hover preview
+  const undoRange = useMemo(() => {
+    if (!canUndo || undoStack.length === 0) return null;
+    const target = undoStack[undoStack.length - 1];
+    const start = target.length;
+    const end = content.length;
+    if (start >= end) return null;
+    return { start, end };
+  }, [canUndo, content, undoStack]);
+
+  const handleUndoHover = useCallback((range: { start: number; end: number }) => {
+    setUndoHighlightRange(range);
+  }, []);
+
+  const handleUndoLeave = useCallback(() => {
+    setUndoHighlightRange(null);
+  }, []);
 
   return (
     <main className="flex-1 h-full flex flex-col overflow-hidden">
@@ -383,6 +433,9 @@ function ActiveEditor({
             onUndo={handleUndo}
             onRedo={handleRedo}
             undoPreview={undoPreview}
+            undoRange={undoRange}
+            onUndoHover={handleUndoHover}
+            onUndoLeave={handleUndoLeave}
           />
         </section>
 
@@ -449,6 +502,9 @@ function Toolbar({
   onUndo,
   onRedo,
   undoPreview,
+  undoRange,
+  onUndoHover,
+  onUndoLeave,
 }: {
   isGenerating: boolean;
   canGenerate: boolean;
@@ -460,6 +516,9 @@ function Toolbar({
   onUndo: () => void;
   onRedo: () => void;
   undoPreview: string;
+  undoRange: { start: number; end: number } | null;
+  onUndoHover: (range: { start: number; end: number }) => void;
+  onUndoLeave: () => void;
 }) {
   const [showUndoPreview, setShowUndoPreview] = useState(false);
 
@@ -489,9 +548,17 @@ function Toolbar({
         onClick={onUndo}
         disabled={!canUndo || isGenerating}
         className="btn-ghost relative"
-        title={undoPreview || "Nothing to undo"}
-        onMouseEnter={() => canUndo && setShowUndoPreview(true)}
-        onMouseLeave={() => setShowUndoPreview(false)}
+        title="Retry / Undo"
+        onMouseEnter={() => {
+          if (undoRange) {
+            onUndoHover(undoRange);
+          }
+          setShowUndoPreview(true);
+        }}
+        onMouseLeave={() => {
+          onUndoLeave();
+          setShowUndoPreview(false);
+        }}
       >
         <Undo2 size={14} /> Retry / Undo
         {showUndoPreview && undoPreview && (
