@@ -1,0 +1,65 @@
+import { useStore } from "../useStore";
+import { act } from "@testing-library/react";
+
+// Reset store before each test
+beforeEach(() => {
+  useStore.getState().clearHistory();
+});
+
+test("initial state has empty stacks and baseContent", () => {
+  const state = useStore.getState();
+  expect(state.undoStack).toEqual([]);
+  expect(state.redoStack).toEqual([]);
+  expect(state.baseContent).toEqual("");
+});
+
+test("pushCheckpoint adds to undoStack and clears redoStack", () => {
+  const { pushCheckpoint } = useStore.getState();
+  pushCheckpoint("hello");
+  pushCheckpoint("world");
+  const state = useStore.getState();
+  expect(state.undoStack).toEqual(["hello", "world"]);
+  expect(state.redoStack).toEqual([]);
+});
+
+test("undo returns target and updates stacks", () => {
+  const { pushCheckpoint, setBaseContent, undo } = useStore.getState();
+  pushCheckpoint("abc");
+  setBaseContent("abcdef"); // simulate after generation
+  const result = undo();
+  expect(result).toEqual({ targetContent: "abc", removedText: "def" });
+  const state = useStore.getState();
+  expect(state.undoStack).toEqual([]);
+  expect(state.redoStack).toEqual(["abcdef"]);
+  expect(state.baseContent).toBe("abc");
+});
+
+test("undo with empty stack returns null", () => {
+  const { undo } = useStore.getState();
+  const result = undo();
+  expect(result).toBeNull();
+});
+
+test("redo returns target and updates stacks", () => {
+  const { pushCheckpoint, setBaseContent, undo, redo } = useStore.getState();
+  pushCheckpoint("xyz");
+  setBaseContent("xyz123");
+  undo(); // now baseContent="xyz", redoStack=["xyz123"]
+  const result = redo();
+  expect(result).toEqual({ targetContent: "xyz123", addedText: "123" });
+  const state = useStore.getState();
+  expect(state.redoStack).toEqual([]);
+  expect(state.undoStack).toEqual(["xyz"]);
+  expect(state.baseContent).toBe("xyz123");
+});
+
+test("clearHistory resets stacks and baseContent", () => {
+  const { pushCheckpoint, setBaseContent, clearHistory } = useStore.getState();
+  pushCheckpoint("a");
+  setBaseContent("ab");
+  clearHistory();
+  const state = useStore.getState();
+  expect(state.undoStack).toEqual([]);
+  expect(state.redoStack).toEqual([]);
+  expect(state.baseContent).toBe("");
+});
