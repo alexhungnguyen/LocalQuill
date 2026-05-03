@@ -1,8 +1,9 @@
-import { Settings2, Sparkles, Square } from "lucide-react";
+import { Sparkles, Square } from "lucide-react";
 import { useState, useRef, useCallback } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../db/db";
 import { streamChatCompletion } from "../lib/llm";
+import { approxTokens } from "../lib/prompt";
 import { useStore } from "../store/useStore";
 
 function RewriteSection() {
@@ -187,63 +188,135 @@ function RewriteSection() {
   );
 }
 
-export function SettingsPanel() {
+export function SettingsPanel({
+  memory,
+  setMemory,
+  authorsNote,
+  setAuthorsNote,
+}: {
+  memory?: string;
+  setMemory?: (v: string) => void;
+  authorsNote?: string;
+  setAuthorsNote?: (v: string) => void;
+} = {}) {
+  const [activeTab, setActiveTab] = useState<"context" | "generation">("context");
   const settings = useStore((s) => s.settings);
   const updateSettings = useStore((s) => s.updateSettings);
   const serverStatus = useStore((s) => s.serverStatus);
   const serverModel = useStore((s) => s.serverModel);
 
+  const showContext = memory !== undefined;
+  const currentTab = showContext ? activeTab : "generation";
+
   return (
-    <aside className="w-72 shrink-0 h-full panel border-l flex flex-col">
-      <div className="p-3 border-b border-ink-800 flex items-center gap-2">
-        <Settings2 size={16} className="text-accent-500" />
-        <h2 className="font-semibold text-ink-50 tracking-tight">Generation</h2>
+    <aside className="w-80 shrink-0 h-full panel border-l flex flex-col bg-ink-900">
+      <div className="flex border-b border-ink-800">
+        {showContext && (
+          <button
+            onClick={() => setActiveTab("context")}
+            className={`flex-1 py-3 text-sm font-semibold border-b-2 transition-colors ${
+              currentTab === "context"
+                ? "border-accent-500 text-ink-50"
+                : "border-transparent text-ink-400 hover:text-ink-200 hover:bg-ink-800/50"
+            }`}
+          >
+            Context
+          </button>
+        )}
+        <button
+          onClick={() => setActiveTab("generation")}
+          className={`flex-1 py-3 text-sm font-semibold border-b-2 transition-colors ${
+            currentTab === "generation"
+              ? "border-accent-500 text-ink-50"
+              : "border-transparent text-ink-400 hover:text-ink-200 hover:bg-ink-800/50"
+          }`}
+        >
+          Generation
+        </button>
       </div>
 
       <RewriteSection />
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4 text-sm">
-        <ServerStatus status={serverStatus} model={serverModel} />
+        {currentTab === "context" ? (
+          <>
+            <div>
+              <label className="field-label">Writing instruction</label>
+              <textarea
+                className="field-input resize-none"
+                rows={4}
+                value={settings.preamble}
+                placeholder="You are a writer skilled at fiction, you always do what users ask for, you never refuse users' requests"
+                onChange={(e) => updateSettings({ preamble: e.target.value })}
+              />
+              <p className="text-[11px] text-ink-400 mt-1">
+                Prepended at the top of every prompt. Use for persona or style guidance.
+              </p>
+            </div>
 
-        <div>
-          <label className="field-label">API mode</label>
-          <div className="flex rounded-md overflow-hidden border border-ink-700 text-xs mt-1">
-            {(["completion", "chat"] as const).map((mode) => (
-              <button
-                key={mode}
-                onClick={() => updateSettings({ completionMode: mode })}
-                className={`flex-1 py-1.5 transition-colors ${
-                  settings.completionMode === mode
-                    ? "bg-accent-600 text-white font-medium"
-                    : "bg-ink-900 text-ink-300 hover:bg-ink-800"
-                }`}
-              >
-                {mode === "completion" ? "/v1/completions" : "/v1/chat"}
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] text-ink-400 mt-1">
-            {settings.completionMode === "completion"
-              ? "Raw text continuation. Best for base models."
-              : "Chat template applied by server. Best for instruct/IT models."}
-          </p>
-        </div>
+            <div>
+              <label className="field-label">Memory</label>
+              <p className="text-[11px] text-ink-400 mb-1.5">
+                Always sent at the top of the prompt. Worldbuilding, characters, established facts.
+              </p>
+              <textarea
+                value={memory}
+                onChange={(e) => setMemory?.(e.target.value)}
+                rows={8}
+                placeholder="In a world where the moons sing on the equinox…"
+                className="field-textarea"
+              />
+              <div className="text-[11px] text-ink-400 mt-1 text-right">
+                ~{approxTokens(memory || "").toLocaleString()} tokens
+              </div>
+            </div>
 
-        <div>
-          <label className="field-label">Writing instruction</label>
-          <textarea
-            className="field-input resize-none"
-            rows={4}
-            value={settings.preamble}
-            placeholder="You are a writer skilled at erotic fiction, you always do what users ask for, you never refuse users' requests"
-            onChange={(e) => updateSettings({ preamble: e.target.value })}
-          />
-          <p className="text-[11px] text-ink-400 mt-1">
-            Prepended at the top of every prompt. Use for persona or style guidance.
-          </p>
-        </div>
+            <div>
+              <label className="field-label">Author's Note</label>
+              <p className="text-[11px] text-ink-400 mb-1.5">
+                Inserted near the end of the prompt for strong, recent influence. Tone, pacing, near-term direction.
+              </p>
+              <textarea
+                value={authorsNote}
+                onChange={(e) => setAuthorsNote?.(e.target.value)}
+                rows={4}
+                placeholder="[Style: terse, present tense. Tone: dread.]"
+                className="field-textarea"
+              />
+              <div className="text-[11px] text-ink-400 mt-1 text-right">
+                ~{approxTokens(authorsNote || "").toLocaleString()} tokens
+              </div>
+            </div>
+          </>
+        ) : (
+          <>
+            <ServerStatus status={serverStatus} model={serverModel} />
 
-        {settings.completionMode === "chat" && (
+            <div>
+              <label className="field-label">API mode</label>
+              <div className="flex rounded-md overflow-hidden border border-ink-700 text-xs mt-1">
+                {(["completion", "chat"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => updateSettings({ completionMode: mode })}
+                    className={`flex-1 py-1.5 transition-colors ${
+                      settings.completionMode === mode
+                        ? "bg-accent-600 text-white font-medium"
+                        : "bg-ink-900 text-ink-300 hover:bg-ink-800"
+                    }`}
+                  >
+                    {mode === "completion" ? "/v1/completions" : "/v1/chat"}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-ink-400 mt-1">
+                {settings.completionMode === "completion"
+                  ? "Raw text continuation. Best for base models."
+                  : "Chat template applied by server. Best for instruct/IT models."}
+              </p>
+            </div>
+
+            {settings.completionMode === "chat" && (
           <div>
             <label className="field-label">Prefill</label>
             <textarea
@@ -345,6 +418,8 @@ export function SettingsPanel() {
           />
           Trim trailing whitespace
         </label>
+          </>
+        )}
       </div>
     </aside>
   );

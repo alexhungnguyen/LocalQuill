@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Local NovelAI-style storywriting UI for an MLX LM server",
+  "description": "Local NovelAI-style storywriting UI",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",

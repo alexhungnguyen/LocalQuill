@@ -52,12 +52,14 @@ export async function streamCompletion(
     max_tokens: params.maxTokens,
     temperature: params.temperature,
     top_p: params.topP,
-    stream: true,
+    // stream: true,
   };
   if (params.stop && params.stop.length > 0) body.stop = params.stop;
   if (params.repetitionPenalty !== undefined) {
     body.repetition_penalty = params.repetitionPenalty;
   }
+
+  console.log("[llm] POST /v1/completions", body);
 
   let response: Response;
   try {
@@ -68,16 +70,20 @@ export async function streamCompletion(
       signal: handlers.signal,
     });
   } catch (err) {
+    console.error("[llm] fetch error:", err);
     handlers.onError(asError(err));
     return;
   }
 
+  console.log("[llm] response status:", response.status, response.statusText);
+
   if (!response.ok || !response.body) {
     const text = await response.text().catch(() => "");
+    console.error("[llm] error body:", text);
     handlers.onError(
       new Error(
         `Server returned ${response.status} ${response.statusText}` +
-          (text ? `: ${text.slice(0, 200)}` : ""),
+        (text ? `: ${text.slice(0, 200)}` : ""),
       ),
     );
     return;
@@ -105,7 +111,9 @@ export async function streamCompletion(
           .find((l) => l.startsWith("data:"));
         if (!dataLine) continue;
         const payload = dataLine.slice(5).trim();
+        // console.log("[llm] chunk:", payload);
         if (payload === "[DONE]") {
+          console.log("[llm] done, finish_reason:", finishReason);
           handlers.onDone(finishReason);
           return;
         }
@@ -125,12 +133,151 @@ export async function streamCompletion(
         }
       }
     }
+    console.log("[llm] stream ended, finish_reason:", finishReason);
     handlers.onDone(finishReason);
   } catch (err) {
     if ((err as { name?: string }).name === "AbortError") {
+      console.log("[llm] aborted by user");
       handlers.onDone("aborted");
       return;
     }
+    console.error("[llm] stream error:", err);
+    handlers.onError(asError(err));
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+export interface ChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface ChatCompletionParams {
+  messages: ChatMessage[];
+  maxTokens: number;
+  temperature: number;
+  topP: number;
+  stop?: string[];
+  repetitionPenalty?: number;
+}
+
+/**
+ * Stream a chat completion. Tokens are delivered to `onToken` as they arrive.
+ * Uses /v1/chat/completions — the server applies the model's chat template,
+ * making this suitable for instruct/IT models.
+ */
+export async function streamChatCompletion(
+  params: ChatCompletionParams,
+  handlers: StreamHandlers,
+): Promise<void> {
+  let tokenCount = 0;
+  const body: Record<string, unknown> = {
+    messages: params.messages,
+    max_tokens: params.maxTokens,
+    temperature: params.temperature,
+    top_p: params.topP,
+    stream: true,
+  };
+  if (params.stop && params.stop.length > 0) body.stop = params.stop;
+  if (params.repetitionPenalty !== undefined) {
+    body.repetition_penalty = params.repetitionPenalty;
+  }
+
+  console.log("[llm] POST /v1/chat/completions", body);
+
+  let response: Response;
+  try {
+    response = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: handlers.signal,
+    });
+  } catch (err) {
+    console.error("[llm] fetch error:", err);
+    handlers.onError(asError(err));
+    return;
+  }
+
+  console.log("[llm] response status:", response.status, response.statusText);
+
+  if (!response.ok || !response.body) {
+    const text = await response.text().catch(() => "");
+    console.error("[llm] error body:", text);
+    handlers.onError(
+      new Error(
+        `Server returned ${response.status} ${response.statusText}` +
+        (text ? `: ${text.slice(0, 200)}` : ""),
+      ),
+    );
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let finishReason: string | null = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const message = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const dataLine = message
+          .split("\n")
+          .find((l) => l.startsWith("data:"));
+        if (!dataLine) continue;
+        const payload = dataLine.slice(5).trim();
+        // console.log("[llm] chunk:", payload);
+        if (payload === "[DONE]") {
+          console.log("[llm] done, finish_reason:", finishReason);
+          handlers.onDone(finishReason);
+          return;
+        }
+        try {
+          const json = JSON.parse(payload) as {
+            choices?: Array<{
+              delta?: { content?: string };
+              finish_reason?: string | null;
+            }>;
+          };
+          const choice = json.choices?.[0];
+          if (!choice) continue;
+          if (choice.delta?.content) {
+            tokenCount++;
+            handlers.onToken(choice.delta.content);
+          }
+          if (choice.finish_reason) {
+            finishReason = choice.finish_reason;
+            if (choice.finish_reason === "content_filter") {
+              handlers.onError(new Error("Request blocked by content filter (finish_reason: content_filter)."));
+              return;
+            }
+          }
+        } catch {
+          // Skip malformed chunks.
+        }
+      }
+    }
+    console.log("[llm] stream ended, finish_reason:", finishReason, "tokens:", tokenCount);
+    if (tokenCount === 0 && finishReason === "stop") {
+      handlers.onError(new Error("Model generated nothing — silent refusal. Try /v1/completions mode or a different model."));
+      return;
+    }
+    handlers.onDone(finishReason);
+  } catch (err) {
+    if ((err as { name?: string }).name === "AbortError") {
+      console.log("[llm] aborted by user");
+      handlers.onDone("aborted");
+      return;
+    }
+    console.error("[llm] stream error:", err);
     handlers.onError(asError(err));
   } finally {
     reader.releaseLock();

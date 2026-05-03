@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { Editor } from "./components/Editor";
-import { SettingsPanel } from "./components/SettingsPanel";
 import { useStore } from "./store/useStore";
 import { pingServer } from "./lib/llm";
 
@@ -34,7 +33,6 @@ export default function App() {
     <div className="flex h-full w-full">
       <Sidebar />
       <Editor />
-      <SettingsPanel />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useLiveQuery } from "dexie-react-hooks";
-import { Sparkles, Square, Undo2, Redo2, FileText, Brain } from "lucide-react";
+import { Sparkles, Square, Undo2, Redo2, Brain } from "lucide-react";
 
 // Redo2 is imported for Task 3 (redo button UI)
 Redo2;
@@ -16,6 +16,7 @@ import { approxTokens, buildPrompt, buildChatMessages, type StorySegment } from 
 import type { GenerationSpan } from "../db/db";
 import { snapshotStory, updateStory } from "../lib/stories";
 import { useStore } from "../store/useStore";
+import { SettingsPanel } from "./SettingsPanel";
 
 const AUTOSAVE_MS = 400;
 
@@ -75,7 +76,12 @@ export function Editor() {
   );
 
   if (!currentStoryId || !story) {
-    return <EmptyState />;
+    return (
+      <div className="flex-1 flex min-w-0">
+        <EmptyState />
+        <SettingsPanel />
+      </div>
+    );
   }
 
   return (
@@ -573,51 +579,12 @@ function ActiveEditor({
         </section>
 
         {showSidePanels && (
-          <aside className="w-80 shrink-0 border-l border-ink-800 bg-ink-900 flex flex-col">
-            <div className="p-3 border-b border-ink-800 flex items-center gap-2">
-              <FileText size={14} className="text-accent-500" />
-              <h3 className="font-semibold text-ink-50 text-sm">
-                Story Context
-              </h3>
-            </div>
-            <div className="flex-1 overflow-y-auto p-3 space-y-4">
-              <div>
-                <label className="field-label">Memory</label>
-                <p className="text-[11px] text-ink-400 mb-1.5">
-                  Always sent at the top of the prompt. Worldbuilding,
-                  characters, established facts.
-                </p>
-                <textarea
-                  value={memory}
-                  onChange={(e) => setMemory(e.target.value)}
-                  rows={8}
-                  placeholder="In a world where the moons sing on the equinox…"
-                  className="field-textarea"
-                />
-                <div className="text-[11px] text-ink-400 mt-1 text-right">
-                  ~{approxTokens(memory).toLocaleString()} tokens
-                </div>
-              </div>
-
-              <div>
-                <label className="field-label">Author's Note</label>
-                <p className="text-[11px] text-ink-400 mb-1.5">
-                  Inserted near the end of the prompt for strong, recent
-                  influence. Tone, pacing, near-term direction.
-                </p>
-                <textarea
-                  value={authorsNote}
-                  onChange={(e) => setAuthorsNote(e.target.value)}
-                  rows={4}
-                  placeholder="[Style: terse, present tense. Tone: dread.]"
-                  className="field-textarea"
-                />
-                <div className="text-[11px] text-ink-400 mt-1 text-right">
-                  ~{approxTokens(authorsNote).toLocaleString()} tokens
-                </div>
-              </div>
-            </div>
-          </aside>
+          <SettingsPanel
+            memory={memory}
+            setMemory={setMemory}
+            authorsNote={authorsNote}
+            setAuthorsNote={setAuthorsNote}
+          />
         )}
       </div>
     </main>

@@ -9,6 +9,8 @@ export async function createStory(title = "Untitled Story"): Promise<Story> {
     content: "",
     memory: "",
     authorsNote: "",
+    generationSpans: [],
+    folderId: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -82,6 +84,8 @@ export async function importStoryFromJSON(json: string): Promise<Story> {
     content: parsed.content ?? "",
     memory: parsed.memory ?? "",
     authorsNote: parsed.authorsNote ?? "",
+    generationSpans: parsed.generationSpans ?? [],
+    folderId: parsed.folderId ?? null,
     createdAt: now,
     updatedAt: now,
   };
