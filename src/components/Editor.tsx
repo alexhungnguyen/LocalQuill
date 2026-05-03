@@ -149,6 +149,7 @@ function ActiveEditor({
   const setSelection = useStore((s) => s.setSelection);
   const setRewritePreview = useStore((s) => s.setRewritePreview);
   const setPendingRewriteAccept = useStore((s) => s.setPendingRewriteAccept);
+  const pendingRewriteAccept = useStore((s) => s.pendingRewriteAccept);
 
   // Compute undo/redo availability
   const canUndo = undoStack.length > 0 && content === baseContent;
@@ -404,6 +405,20 @@ function ActiveEditor({
     const el = editorRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [content, isGenerating]);
+
+  useEffect(() => {
+    if (!pendingRewriteAccept) return;
+    const { start, end, text } = pendingRewriteAccept;
+    const newContent = content.slice(0, start) + text + content.slice(end);
+    pushCheckpoint(content);
+    setContent(newContent);
+    setGenerationSpans((prev) => applyRewriteToSpans(prev, start, end, text.length));
+    setBaseContent(newContent);
+    setPendingRewriteAccept(null);
+    setSelection("", null);
+    setRewritePreview(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingRewriteAccept]);
 
   // Manage selection highlighting for undo preview
   useEffect(() => {
