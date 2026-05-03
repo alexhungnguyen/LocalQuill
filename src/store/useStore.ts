@@ -2,6 +2,12 @@ import { create } from "zustand";
 import { db } from "../db/db";
 
 export interface GenerationSettings {
+  /** Prepended at the very top of every prompt sent to the model. */
+  preamble: string;
+  /** Chat mode only: inserted as the start of the assistant message (prefill). */
+  prefill: string;
+  /** Which completion API to use. */
+  completionMode: "completion" | "chat";
   maxTokens: number;
   temperature: number;
   topP: number;
@@ -15,6 +21,9 @@ export interface GenerationSettings {
 }
 
 export const DEFAULT_SETTINGS: GenerationSettings = {
+  preamble: "",
+  prefill: "",
+  completionMode: "completion",
   maxTokens: 220,
   temperature: 0.85,
   topP: 0.95,
@@ -41,6 +50,10 @@ interface UIState {
   redoStack: string[];
   /** The content at the current history position (the checkpoint). */
   baseContent: string;
+  selectedText: string;
+  selectionRange: { start: number; end: number } | null;
+  rewritePreview: string | null;
+  pendingRewriteAccept: { start: number; end: number; text: string } | null;
 
   setCurrentStoryId: (id: string | null) => void;
   setIsGenerating: (v: boolean) => void;
@@ -54,6 +67,9 @@ interface UIState {
   setBaseContent: (content: string) => void;
   clearHistory: () => void;
   clearRedoStack: () => void;
+  setSelection: (text: string, range: { start: number; end: number } | null) => void;
+  setRewritePreview: (text: string | null) => void;
+  setPendingRewriteAccept: (v: { start: number; end: number; text: string } | null) => void;
 
   loadPersistedSettings: () => Promise<void>;
 }
@@ -68,6 +84,10 @@ export const useStore = create<UIState>((set, get) => ({
   undoStack: [],
   redoStack: [],
   baseContent: "",
+  selectedText: "",
+  selectionRange: null,
+  rewritePreview: null,
+  pendingRewriteAccept: null,
 
   setCurrentStoryId: (id) => {
     set({ currentStoryId: id, lastGenerationLength: null });
@@ -122,6 +142,10 @@ export const useStore = create<UIState>((set, get) => ({
   clearHistory: () => set({ undoStack: [], redoStack: [], baseContent: "" }),
 
   clearRedoStack: () => set(() => ({ redoStack: [] })),
+
+  setSelection: (text, range) => set({ selectedText: text, selectionRange: range }),
+  setRewritePreview: (text) => set({ rewritePreview: text }),
+  setPendingRewriteAccept: (v) => set({ pendingRewriteAccept: v }),
 
   updateSettings: async (patch) => {
     const merged = { ...get().settings, ...patch };

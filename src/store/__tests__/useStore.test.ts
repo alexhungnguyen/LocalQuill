@@ -77,3 +77,31 @@ test("pushCheckpoint caps undoStack at 50 entries", () => {
   // The most recent should be content-59
   expect(state.undoStack[49]).toBe("content-59");
 });
+
+test("setSelection updates selectedText and selectionRange", () => {
+  useStore.getState().setSelection("hello", { start: 0, end: 5 });
+  const s = useStore.getState();
+  expect(s.selectedText).toBe("hello");
+  expect(s.selectionRange).toEqual({ start: 0, end: 5 });
+});
+
+test("setSelection with empty string clears range to null", () => {
+  useStore.getState().setSelection("", null);
+  const s = useStore.getState();
+  expect(s.selectedText).toBe("");
+  expect(s.selectionRange).toBeNull();
+});
+
+test("setRewritePreview sets and clears preview", () => {
+  useStore.getState().setRewritePreview("rewritten text");
+  expect(useStore.getState().rewritePreview).toBe("rewritten text");
+  useStore.getState().setRewritePreview(null);
+  expect(useStore.getState().rewritePreview).toBeNull();
+});
+
+test("setPendingRewriteAccept sets and clears pending accept", () => {
+  useStore.getState().setPendingRewriteAccept({ start: 5, end: 10, text: "new" });
+  expect(useStore.getState().pendingRewriteAccept).toEqual({ start: 5, end: 10, text: "new" });
+  useStore.getState().setPendingRewriteAccept(null);
+  expect(useStore.getState().pendingRewriteAccept).toBeNull();
+});
