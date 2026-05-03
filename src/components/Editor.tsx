@@ -11,12 +11,57 @@ import {
   useState,
 } from "react";
 import { db, type Story } from "../db/db";
-import { streamCompletion } from "../lib/llm";
-import { approxTokens, buildPrompt } from "../lib/prompt";
+import { streamCompletion, streamChatCompletion } from "../lib/llm";
+import { approxTokens, buildPrompt, buildChatMessages, type StorySegment } from "../lib/prompt";
+import type { GenerationSpan } from "../db/db";
 import { snapshotStory, updateStory } from "../lib/stories";
 import { useStore } from "../store/useStore";
 
 const AUTOSAVE_MS = 400;
+
+function findFirstDiff(a: string, b: string): number {
+  const len = Math.min(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) return i;
+  }
+  return len;
+}
+
+function reconcileSpans(spans: GenerationSpan[], editPos: number): GenerationSpan[] {
+  return spans
+    .map((s) => ({ start: s.start, end: Math.min(s.end, editPos) }))
+    .filter((s) => s.start < s.end && s.start < editPos);
+}
+
+function deriveSegments(content: string, spans: GenerationSpan[]): StorySegment[] {
+  if (!spans.length) return content ? [{ type: "user", text: content }] : [];
+  const segs: StorySegment[] = [];
+  let pos = 0;
+  for (const span of spans) {
+    if (pos < span.start) segs.push({ type: "user", text: content.slice(pos, span.start) });
+    const gen = content.slice(span.start, span.end);
+    if (gen) segs.push({ type: "generated", text: gen });
+    pos = span.end;
+  }
+  if (pos < content.length) segs.push({ type: "user", text: content.slice(pos) });
+  return segs.filter((s) => s.text.length > 0);
+}
+
+export function applyRewriteToSpans(
+  spans: GenerationSpan[],
+  start: number,
+  end: number,
+  newLen: number,
+): GenerationSpan[] {
+  const delta = newLen - (end - start);
+  return [
+    ...spans.filter((s) => s.end <= start),
+    { start, end: start + newLen },
+    ...spans
+      .filter((s) => s.start >= end)
+      .map((s) => ({ start: s.start + delta, end: s.end + delta })),
+  ];
+}
 
 export function Editor() {
   const currentStoryId = useStore((s) => s.currentStoryId);
@@ -65,6 +110,7 @@ function ActiveEditor({
   const [content, setContent] = useState(story.content);
   const [memory, setMemory] = useState(story.memory);
   const [authorsNote, setAuthorsNote] = useState(story.authorsNote);
+  const [generationSpans, setGenerationSpans] = useState<GenerationSpan[]>(story.generationSpans ?? []);
   const [showSidePanels, setShowSidePanels] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +166,7 @@ function ActiveEditor({
     setContent(story.content);
     setMemory(story.memory);
     setAuthorsNote(story.authorsNote);
+    setGenerationSpans(story.generationSpans ?? []);
   }, [story.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Debounced autosave. We deliberately don't save on every keystroke —
@@ -130,21 +177,24 @@ function ActiveEditor({
       if (
         content === story.content &&
         memory === story.memory &&
-        authorsNote === story.authorsNote
+        authorsNote === story.authorsNote &&
+        JSON.stringify(generationSpans) === JSON.stringify(story.generationSpans ?? [])
       ) {
         return;
       }
-      void updateStory(story.id, { content, memory, authorsNote });
+      void updateStory(story.id, { content, memory, authorsNote, generationSpans });
     }, AUTOSAVE_MS);
     return () => clearTimeout(t);
   }, [
     content,
     memory,
     authorsNote,
+    generationSpans,
     story.id,
     story.content,
     story.memory,
     story.authorsNote,
+    story.generationSpans,
   ]);
 
   // Save a snapshot before potentially destructive operations (generate,
@@ -161,41 +211,38 @@ function ActiveEditor({
     if (isGenerating) return;
     setError(null);
 
-    let prompt = buildPrompt({
+    const segments = deriveSegments(content, generationSpans);
+    const promptInputs = {
+      preamble: settings.preamble,
+      prefill: settings.prefill,
       memory,
       authorsNote,
       story: content,
+      segments,
       contextTokens: settings.contextTokens,
       authorsNoteDepthChars: settings.authorsNoteDepth,
-    });
+    };
 
-    // An empty prompt crashes mlx_lm.server (IndexError on `seq[-1]`
-    // inside generate.py:insert_segments). Catch it here with a friendly hint.
-    if (prompt.trim().length === 0) {
-      setError(
-        "Nothing to continue from yet. Type a sentence, or fill in Memory / Author's Note.",
-      );
-      return;
+    const isChatMode = settings.completionMode === "chat";
+
+    if (isChatMode) {
+      const hasContent = memory.trim() || content.trim() || authorsNote.trim();
+      if (!hasContent) {
+        setError("Nothing to continue from yet. Type a sentence, or fill in Memory / Author's Note.");
+        return;
+      }
+    } else {
+      const prompt = buildPrompt(promptInputs);
+      // An empty prompt crashes mlx_lm.server (IndexError on `seq[-1]`
+      // inside generate.py:insert_segments). Catch it here with a friendly hint.
+      if (prompt.trim().length === 0) {
+        setError("Nothing to continue from yet. Type a sentence, or fill in Memory / Author's Note.");
+        return;
+      }
     }
 
-    // See `sentPromptsRef` declaration above for context. A trailing
-    // newline is a natural place to break a cache match — it's how a
-    // continuation would normally start anyway, and it doesn't show up
-    // in the user's saved content.
-    while (sentPromptsRef.current.has(prompt)) {
-      prompt += "\n";
-    }
-    sentPromptsRef.current.add(prompt);
-    // Bound memory: keep only the most recent 32 sent prompts.
-    if (sentPromptsRef.current.size > 32) {
-      const first = sentPromptsRef.current.values().next().value;
-      if (first !== undefined) sentPromptsRef.current.delete(first);
-    }
-
-    // Save pre-generation content for history tracking
     preGenerationContentRef.current = content;
     pushCheckpoint(content);
-
     await flushAndSnapshot("before generate");
 
     const abort = new AbortController();
@@ -204,53 +251,84 @@ function ActiveEditor({
     generatingFromRef.current = content.length;
     let appended = "";
 
-    await streamCompletion(
-      {
-        prompt,
-        maxTokens: settings.maxTokens,
-        temperature: settings.temperature,
-        topP: settings.topP,
-        repetitionPenalty: settings.repetitionPenalty,
-        stop: settings.stop,
+    const sharedHandlers = {
+      signal: abort.signal,
+      onToken: (chunk: string) => {
+        appended += chunk;
+        setContent((prev) => prev + chunk);
       },
-      {
-        signal: abort.signal,
-        onToken: (chunk) => {
-          appended += chunk;
-          setContent((prev) => prev + chunk);
-        },
-        onDone: () => {
-          if (settings.trimTrailingWhitespace) {
-            const trimmed = appended.replace(/\s+$/u, "");
-            const drop = appended.length - trimmed.length;
-            if (drop > 0) {
-              appended = trimmed;
-              setContent((prev) => prev.slice(0, prev.length - drop));
-            }
+      onDone: () => {
+        if (settings.trimTrailingWhitespace) {
+          const trimmed = appended.replace(/\s+$/u, "");
+          const drop = appended.length - trimmed.length;
+          if (drop > 0) {
+            appended = trimmed;
+            setContent((prev) => prev.slice(0, prev.length - drop));
           }
-          const finalContent = preGenerationContentRef.current + appended;
-          setBaseContent(finalContent);
-          setLastGenLen(appended.length);
-          setIsGenerating(false);
-          abortRef.current = null;
-          // Refocus the editor so the user can keep writing/generating.
-          requestAnimationFrame(() => {
-            const el = editorRef.current;
-            if (el) {
-              el.focus();
-              el.selectionStart = el.selectionEnd = el.value.length;
-              el.scrollTop = el.scrollHeight;
-            }
-          });
-        },
-        onError: (err) => {
-          setError(err.message);
-          setIsGenerating(false);
-          setLastGenLen(appended.length || null);
-          abortRef.current = null;
-        },
+        }
+        const finalContent = preGenerationContentRef.current + appended;
+        if (appended.length > 0) {
+          const spanStart = preGenerationContentRef.current.length;
+          const spanEnd = spanStart + appended.length;
+          setGenerationSpans((prev) => [...prev, { start: spanStart, end: spanEnd }]);
+        }
+        setBaseContent(finalContent);
+        setLastGenLen(appended.length);
+        setIsGenerating(false);
+        abortRef.current = null;
+        requestAnimationFrame(() => {
+          const el = editorRef.current;
+          if (el) {
+            el.focus();
+            el.selectionStart = el.selectionEnd = el.value.length;
+            el.scrollTop = el.scrollHeight;
+          }
+        });
       },
-    );
+      onError: (err: Error) => {
+        setError(err.message);
+        setIsGenerating(false);
+        setLastGenLen(appended.length || null);
+        abortRef.current = null;
+      },
+    };
+
+    if (isChatMode) {
+      const messages = buildChatMessages(promptInputs);
+      await streamChatCompletion(
+        {
+          messages,
+          maxTokens: settings.maxTokens,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          repetitionPenalty: settings.repetitionPenalty,
+          stop: settings.stop,
+        },
+        sharedHandlers,
+      );
+    } else {
+      // See `sentPromptsRef` declaration above for context.
+      let prompt = buildPrompt(promptInputs);
+      while (sentPromptsRef.current.has(prompt)) {
+        prompt += "\n";
+      }
+      sentPromptsRef.current.add(prompt);
+      if (sentPromptsRef.current.size > 32) {
+        const first = sentPromptsRef.current.values().next().value;
+        if (first !== undefined) sentPromptsRef.current.delete(first);
+      }
+      await streamCompletion(
+        {
+          prompt,
+          maxTokens: settings.maxTokens,
+          temperature: settings.temperature,
+          topP: settings.topP,
+          repetitionPenalty: settings.repetitionPenalty,
+          stop: settings.stop,
+        },
+        sharedHandlers,
+      );
+    }
   }, [
     content,
     memory,
@@ -267,11 +345,11 @@ function ActiveEditor({
   }, []);
 
   const handleUndo = useCallback(() => {
-    // Clear any hover preview selection
     setUndoHighlightRange(null);
     const result = undo();
     if (result) {
       setContent(result.targetContent);
+      setGenerationSpans((prev) => reconcileSpans(prev, result.targetContent.length));
     }
   }, [undo]);
 
@@ -279,6 +357,12 @@ function ActiveEditor({
     const result = redo();
     if (result) {
       setContent(result.targetContent);
+      // Redo restores previously generated content — re-add the span for it.
+      setGenerationSpans((prev) => {
+        const editPos = findFirstDiff(result.targetContent.slice(0, -result.addedText.length), result.targetContent);
+        const cleaned = reconcileSpans(prev, editPos);
+        return [...cleaned, { start: editPos, end: result.targetContent.length }];
+      });
     }
   }, [redo]);
 
@@ -291,9 +375,11 @@ function ActiveEditor({
         else void handleGenerate();
       } else if (e.key === "Escape" && isGenerating) {
         handleStop();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === "z") {
-        e.preventDefault();
-        if (canUndo) void handleUndo();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === "z" && !e.shiftKey) {
+        if (canUndo) {
+          e.preventDefault();
+          void handleUndo();
+        }
       } else if (((e.metaKey || e.ctrlKey) && e.key === "y") || ((e.metaKey && e.shiftKey) && e.key === "Z")) {
         e.preventDefault();
         if (canRedo) void handleRedo();
@@ -337,20 +423,27 @@ function ActiveEditor({
     }
   }, [undoHighlightRange]);
 
-  const promptPreview = useMemo(
-    () =>
-      buildPrompt({
-        memory,
-        authorsNote,
-        story: content,
-        contextTokens: settings.contextTokens,
-        authorsNoteDepthChars: settings.authorsNoteDepth,
-      }),
-    [memory, authorsNote, content, settings.contextTokens, settings.authorsNoteDepth],
-  );
-
-  const promptTokens = approxTokens(promptPreview);
-  const canGenerate = promptPreview.trim().length > 0;
+  const { promptTokens, canGenerate } = useMemo(() => {
+    const inputs = {
+      preamble: settings.preamble,
+      prefill: settings.prefill,
+      memory,
+      authorsNote,
+      story: content,
+      segments: deriveSegments(content, generationSpans),
+      contextTokens: settings.contextTokens,
+      authorsNoteDepthChars: settings.authorsNoteDepth,
+    };
+    if (settings.completionMode === "chat") {
+      const hasContent = !!(memory.trim() || content.trim() || authorsNote.trim());
+      const totalText = hasContent
+        ? buildChatMessages(inputs).map((m) => m.content).join("\n")
+        : "";
+      return { promptTokens: approxTokens(totalText), canGenerate: hasContent };
+    }
+    const preview = buildPrompt(inputs);
+    return { promptTokens: approxTokens(preview), canGenerate: preview.trim().length > 0 };
+  }, [memory, authorsNote, content, generationSpans, settings.preamble, settings.prefill, settings.completionMode, settings.contextTokens, settings.authorsNoteDepth]);
 
   const undoPreview = useMemo(() => {
     if (!canUndo || undoStack.length === 0) return "";
@@ -408,7 +501,9 @@ function ActiveEditor({
             value={content}
             onChange={(e) => {
               const newValue = e.target.value;
+              const editPos = findFirstDiff(content, newValue);
               setContent(newValue);
+              setGenerationSpans((prev) => reconcileSpans(prev, editPos));
               if (redoStack.length > 0) {
                 useStore.getState().clearRedoStack();
               }
