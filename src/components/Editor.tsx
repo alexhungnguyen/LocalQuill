@@ -146,6 +146,10 @@ function ActiveEditor({
   const setBaseContent = useStore((s) => s.setBaseContent);
   const clearHistory = useStore((s) => s.clearHistory);
 
+  const setSelection = useStore((s) => s.setSelection);
+  const setRewritePreview = useStore((s) => s.setRewritePreview);
+  const setPendingRewriteAccept = useStore((s) => s.setPendingRewriteAccept);
+
   // Compute undo/redo availability
   const canUndo = undoStack.length > 0 && content === baseContent;
   const canRedo = redoStack.length > 0 && content === baseContent;
@@ -157,7 +161,10 @@ function ActiveEditor({
   useEffect(() => {
     clearHistory();
     setBaseContent(story.content);
-  }, [story.id, clearHistory, setBaseContent]);
+    setSelection("", null);
+    setRewritePreview(null);
+    setPendingRewriteAccept(null);
+  }, [story.id, clearHistory, setBaseContent, setSelection, setRewritePreview, setPendingRewriteAccept]);
 
   // When the user switches stories, sync local state from the new row.
   // We compare ids via the `key` on this component, but if the same story
@@ -469,6 +476,20 @@ function ActiveEditor({
     setUndoHighlightRange(null);
   }, []);
 
+  const handleSelectionChange = useCallback(() => {
+    const el = editorRef.current;
+    if (!el) return;
+    const { selectionStart, selectionEnd, value } = el;
+    if (selectionStart !== selectionEnd) {
+      setSelection(value.slice(selectionStart, selectionEnd), {
+        start: selectionStart,
+        end: selectionEnd,
+      });
+    } else if (document.activeElement === el) {
+      setSelection("", null);
+    }
+  }, [setSelection]);
+
   return (
     <main className="flex-1 h-full flex flex-col overflow-hidden">
       <header className="flex items-center gap-2 px-4 py-2 border-b border-ink-800 bg-ink-900">
@@ -508,6 +529,8 @@ function ActiveEditor({
                 useStore.getState().clearRedoStack();
               }
             }}
+            onMouseUp={handleSelectionChange}
+            onKeyUp={handleSelectionChange}
             placeholder={
               "Start typing your story here, or paste a beginning and hit Generate.\n\nThe model continues from wherever the cursor is at the end of the text — exactly like a typewriter that drinks too much coffee."
             }
