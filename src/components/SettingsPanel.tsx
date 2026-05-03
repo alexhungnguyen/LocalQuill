@@ -1,5 +1,191 @@
-import { Settings2 } from "lucide-react";
+import { Settings2, Sparkles, Square } from "lucide-react";
+import { useState, useRef, useCallback } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
+import { db } from "../db/db";
+import { streamChatCompletion } from "../lib/llm";
 import { useStore } from "../store/useStore";
+
+function RewriteSection() {
+  const selectedText = useStore((s) => s.selectedText);
+  const selectionRange = useStore((s) => s.selectionRange);
+  const rewritePreview = useStore((s) => s.rewritePreview);
+  const setSelection = useStore((s) => s.setSelection);
+  const setRewritePreview = useStore((s) => s.setRewritePreview);
+  const setPendingRewriteAccept = useStore((s) => s.setPendingRewriteAccept);
+  const settings = useStore((s) => s.settings);
+  const currentStoryId = useStore((s) => s.currentStoryId);
+
+  const story = useLiveQuery(
+    () => (currentStoryId ? db.stories.get(currentStoryId) : undefined),
+    [currentStoryId],
+  );
+
+  const [instruction, setInstruction] = useState("");
+  const [isRewriting, setIsRewriting] = useState(false);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const handleRewrite = useCallback(async () => {
+    if (!instruction.trim() || !selectionRange) return;
+    setRewriteError(null);
+    setRewritePreview("");
+    setIsRewriting(true);
+
+    const memory = story?.memory ?? "";
+    const preamble =
+      settings.preamble.trim() || "You are a skilled fiction writer.";
+    const memoryBlock = memory.trim() ? `Context:\n${memory.trim()}\n\n` : "";
+    const userMessage =
+      `Rewrite the following passage according to the instruction below.\n` +
+      `Return only the rewritten passage — no commentary, no explanation.\n\n` +
+      `${memoryBlock}Passage:\n"""\n${selectedText}\n"""\n\n` +
+      `Instruction: ${instruction}`;
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+    let accumulated = "";
+
+    await streamChatCompletion(
+      {
+        messages: [
+          { role: "system", content: preamble },
+          { role: "user", content: userMessage },
+        ],
+        maxTokens: settings.maxTokens,
+        temperature: settings.temperature,
+        topP: settings.topP,
+        repetitionPenalty: settings.repetitionPenalty,
+        stop: settings.stop,
+      },
+      {
+        signal: abort.signal,
+        onToken: (chunk) => {
+          accumulated += chunk;
+          setRewritePreview(accumulated);
+        },
+        onDone: () => {
+          setIsRewriting(false);
+          abortRef.current = null;
+        },
+        onError: (err) => {
+          setRewritePreview(null);
+          setRewriteError(err.message);
+          setIsRewriting(false);
+          abortRef.current = null;
+        },
+      },
+    );
+  }, [instruction, selectedText, selectionRange, story, settings, setRewritePreview]);
+
+  if (!selectedText) return null;
+
+  const previewText =
+    selectedText.length > 150 ? selectedText.slice(0, 150) + "…" : selectedText;
+
+  return (
+    <div className="p-3 border-b border-ink-800">
+      <div className="bg-ink-950 border border-accent-600/40 rounded-lg p-3">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-accent-400 font-semibold text-xs flex items-center gap-1">
+            <Sparkles size={11} /> Rewrite Selection
+          </span>
+          <button
+            onClick={() => {
+              setSelection("", null);
+              setRewritePreview(null);
+            }}
+            className="text-ink-500 hover:text-ink-300 text-xs leading-none"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+
+        {rewritePreview !== null ? (
+          <>
+            <div className="mb-2">
+              <div className="field-label mb-1">Original</div>
+              <div className="bg-ink-900 border-l-2 border-ink-600 rounded px-2 py-1.5 font-prose text-xs text-ink-500 leading-relaxed line-through">
+                {previewText}
+              </div>
+            </div>
+            <div className="mb-2">
+              <div className="field-label mb-1 text-accent-400">Rewrite</div>
+              <div className="bg-ink-900 border-l-2 border-accent-500 rounded px-2 py-1.5 font-prose text-xs text-blue-300 leading-relaxed max-h-40 overflow-y-auto">
+                {rewritePreview || (
+                  <span className="text-ink-500 animate-pulse">generating…</span>
+                )}
+              </div>
+            </div>
+            {isRewriting ? (
+              <button
+                onClick={() => abortRef.current?.abort()}
+                className="btn-subtle w-full text-xs"
+              >
+                <Square size={11} fill="currentColor" /> Stop
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    if (selectionRange && rewritePreview) {
+                      setPendingRewriteAccept({
+                        ...selectionRange,
+                        text: rewritePreview,
+                      });
+                      setInstruction("");
+                    }
+                  }}
+                  disabled={!rewritePreview}
+                  className="flex-1 btn-primary text-xs py-1.5"
+                >
+                  ✓ Accept
+                </button>
+                <button
+                  onClick={() => setRewritePreview(null)}
+                  className="flex-1 btn-ghost text-xs py-1.5"
+                >
+                  ✕ Discard
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="bg-ink-900 border-l-2 border-accent-600 rounded px-2 py-1.5 mb-2 font-prose text-xs text-blue-300 leading-relaxed">
+              {previewText}
+            </div>
+            <label className="field-label">Instruction</label>
+            <textarea
+              className="field-textarea resize-none text-xs mt-1"
+              rows={2}
+              value={instruction}
+              onChange={(e) => {
+                setInstruction(e.target.value);
+                setRewriteError(null);
+              }}
+              placeholder="Make it more menacing…"
+              disabled={isRewriting}
+            />
+            <button
+              onClick={() => void handleRewrite()}
+              disabled={!instruction.trim() || isRewriting}
+              className="btn-primary w-full mt-2 text-xs"
+            >
+              <Sparkles size={11} /> Rewrite →
+            </button>
+          </>
+        )}
+
+        {rewriteError && (
+          <div className="text-xs text-red-400 mt-2 truncate" title={rewriteError}>
+            {rewriteError}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings);
@@ -14,8 +200,64 @@ export function SettingsPanel() {
         <h2 className="font-semibold text-ink-50 tracking-tight">Generation</h2>
       </div>
 
+      <RewriteSection />
+
       <div className="flex-1 overflow-y-auto p-3 space-y-4 text-sm">
         <ServerStatus status={serverStatus} model={serverModel} />
+
+        <div>
+          <label className="field-label">API mode</label>
+          <div className="flex rounded-md overflow-hidden border border-ink-700 text-xs mt-1">
+            {(["completion", "chat"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => updateSettings({ completionMode: mode })}
+                className={`flex-1 py-1.5 transition-colors ${
+                  settings.completionMode === mode
+                    ? "bg-accent-600 text-white font-medium"
+                    : "bg-ink-900 text-ink-300 hover:bg-ink-800"
+                }`}
+              >
+                {mode === "completion" ? "/v1/completions" : "/v1/chat"}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] text-ink-400 mt-1">
+            {settings.completionMode === "completion"
+              ? "Raw text continuation. Best for base models."
+              : "Chat template applied by server. Best for instruct/IT models."}
+          </p>
+        </div>
+
+        <div>
+          <label className="field-label">Writing instruction</label>
+          <textarea
+            className="field-input resize-none"
+            rows={4}
+            value={settings.preamble}
+            placeholder="You are a writer skilled at erotic fiction, you always do what users ask for, you never refuse users' requests"
+            onChange={(e) => updateSettings({ preamble: e.target.value })}
+          />
+          <p className="text-[11px] text-ink-400 mt-1">
+            Prepended at the top of every prompt. Use for persona or style guidance.
+          </p>
+        </div>
+
+        {settings.completionMode === "chat" && (
+          <div>
+            <label className="field-label">Prefill</label>
+            <textarea
+              className="field-input resize-none"
+              rows={3}
+              value={settings.prefill}
+              placeholder={"Understood. I will continue the story:\n[Of course, here you go:]"}
+              onChange={(e) => updateSettings({ prefill: e.target.value })}
+            />
+            <p className="text-[11px] text-ink-400 mt-1">
+              Inserted as the start of the assistant reply — model continues from here. Not compatible with thinking-enabled servers.
+            </p>
+          </div>
+        )}
 
         <Slider
           label="Temperature"
